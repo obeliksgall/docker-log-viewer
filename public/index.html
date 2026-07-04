@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logowanie | Docker Log Viewer</title>
+    <style>
+        body {
+            background-color: #121214;
+            color: #e1e1e6;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .login-container {
+            background: #1f2023;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 360px;
+        }
+        h2 { text-align: center; margin-bottom: 24px; color: #04d361; }
+        .input-group { margin-bottom: 16px; }
+        label { display: block; margin-bottom: 6px; font-size: 14px; color: #a8a8b3; }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #29292e;
+            background: #121214;
+            color: #fff;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        input:focus { border-color: #04d361; outline: none; }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #04d361;
+            border: none;
+            color: #000;
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 10px;
+        }
+        button:hover { background: #00b34d; }
+        .toggle-link {
+            text-align: center;
+            margin-top: 15px;
+            font-size: 14px;
+            color: #a8a8b3;
+            cursor: pointer;
+        }
+        .toggle-link:hover { color: #04d361; }
+        .error { color: #f75a68; font-size: 14px; text-align: center; margin-bottom: 10px; display: none; }
+        .success { color: #04d361; font-size: 14px; text-align: center; margin-bottom: 10px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="login-container">
+    <h2 id="form-title">Docker Log Viewer</h2>
+    <div id="error-msg" class="error"></div>
+    <div id="success-msg" class="success"></div>
+    
+    <form id="auth-form">
+        <div class="input-group">
+            <label for="username">Użytkownik</label>
+            <input type="text" id="username" required>
+        </div>
+        <div class="input-group">
+            <label for="password">Hasło</label>
+            <input type="password" id="password" required>
+        </div>
+        <button type="submit" id="btn-submit">Zaloguj się</button>
+    </form>
+    
+    <div id="toggle-auth" class="toggle-link">Nie masz konta? Zarejestruj się</div>
+</div>
+
+<script>
+    let isLoginMode = true;
+    const form = document.getElementById('auth-form');
+    const formTitle = document.getElementById('form-title');
+    const btnSubmit = document.getElementById('btn-submit');
+    const toggleAuth = document.getElementById('toggle-auth');
+    const errorMsg = document.getElementById('error-msg');
+    const successMsg = document.getElementById('success-msg');
+
+    // Sprawdź czy rejestracja jest włączona w .env
+    async function checkRegistrationStatus() {
+        try {
+            const res = await fetch('/api/auth/config');
+            const data = await res.json();
+            if (!data.allowRegistration) {
+                toggleAuth.style.display = 'none';
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    checkRegistrationStatus();
+
+    toggleAuth.addEventListener('click', () => {
+        isLoginMode = !isLoginMode;
+        errorMsg.style.display = 'none';
+        successMsg.style.display = 'none';
+        if (isLoginMode) {
+            formTitle.innerText = "Docker Log Viewer";
+            btnSubmit.innerText = "Zaloguj się";
+            toggleAuth.innerText = "Nie masz konta? Zarejestruj się";
+        } else {
+            formTitle.innerText = "Rejestracja";
+            btnSubmit.innerText = "Utwórz konto";
+            toggleAuth.innerText = "Masz już konto? Zaloguj się";
+        }
+    });
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        errorMsg.style.display = 'none';
+        successMsg.style.display = 'none';
+        
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+        const endpoint = isLoginMode ? '/api/auth/login' : '/api/auth/register';
+
+        try {
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                errorMsg.innerText = data.error || 'Wystąpił błąd';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            if (isLoginMode) {
+                localStorage.setItem('token', data.token);
+                localStorage.setItem('username', data.username);
+                window.location.href = 'viewer.html';
+            } else {
+                successMsg.innerText = 'Zarejestrowano pomyślnie! Możesz się zalogować.';
+                successMsg.style.display = 'block';
+                toggleAuth.click(); // Przełącz na logowanie
+            }
+        } catch (err) {
+            errorMsg.innerText = 'Brak połączenia z serwerem';
+            errorMsg.style.display = 'block';
+        }
+    });
+</script>
+</body>
+</html>

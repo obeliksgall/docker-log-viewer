@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  log-viewer:
+    build: .
+    container_name: docker-log-viewer
+    ports:
+      - "${PORT}:${PORT}"
+    environment:
+      - PORT=${PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_USER=${ADMIN_USER}
+      - ADMIN_PASS=${ADMIN_PASS}
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION}
+    volumes:
+      # Baza danych użytkowników (zostanie zachowana po restarcie)
+      - ./config:/app/config
+      
+      # PRZYKŁADOWE MAPOWANIE LOGÓW Z TWOICH INNYCH USŁUG (Zmień lewe ścieżki na poprawne)
+      - /opt/rsync-scheduler/logs:/app/logs/rsync-service:ro
+      - /opt/rclone-scheduler/logs:/app/logs/rclone-service:ro
+    restart: unless-stopped

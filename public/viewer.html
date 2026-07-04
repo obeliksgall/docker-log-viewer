@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Panel | Docker Log Viewer</title>
+    <style>
+        body {
+            margin: 0; padding: 0; background: #121214; color: #e1e1e6;
+            font-family: 'Fira Code', 'Courier New', Courier, monospace;
+            display: flex; height: 100vh; overflow: hidden;
+        }
+        /* Sidebar z drzewem plików */
+        .sidebar {
+            width: 300px; background: #1f2023; border-right: 1px solid #29292e;
+            display: flex; flex-direction: column; flex-shrink: 0;
+        }
+        .sidebar-header {
+            padding: 15px; border-bottom: 1px solid #29292e;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .sidebar-header h3 { margin: 0; color: #04d361; font-size: 16px; }
+        .logout-btn {
+            background: none; border: 1px solid #f75a68; color: #f75a68;
+            padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;
+        }
+        .logout-btn:hover { background: #f75a68; color: #000; }
+        .tree-container { flex: 1; overflow-y: auto; padding: 10px; font-size: 14px; }
+        .tree-folder { font-weight: bold; color: #e1e1e6; margin: 5px 0; cursor: pointer; padding-left: 5px; }
+        .tree-file { color: #a8a8b3; margin: 3px 0; cursor: pointer; padding: 4px 8px; border-radius: 4px; }
+        .tree-file:hover { background: #29292e; color: #fff; }
+        .tree-file.active { background: #04d361; color: #000; font-weight: bold; }
+        .folder-children { padding-left: 15px; display: block; }
+
+        /* Główny obszar logów */
+        .main-content { flex: 1; display: flex; flex-direction: column; background: #121214; }
+        .toolbar {
+            background: #1f2023; padding: 10px 20px; border-bottom: 1px solid #29292e;
+            display: flex; gap: 15px; align-items: center;
+        }
+        .search-box {
+            flex: 1; padding: 8px 12px; background: #121214; border: 1px solid #29292e;
+            color: #fff; border-radius: 4px; font-family: inherit;
+        }
+        .search-box:focus { border-color: #04d361; outline: none; }
+        .tool-btn {
+            background: #29292e; border: 1px solid #323238; color: #e1e1e6;
+            padding: 8px 14px; border-radius: 4px; cursor: pointer; font-family: inherit;
+        }
+        .tool-btn:hover { background: #323238; border-color: #04d361; }
+        
+        /* Terminal z logami */
+        .log-terminal {
+            flex: 1; padding: 20px; overflow-y: auto; white-space: pre-wrap;
+            font-size: 13px; line-height: 1.6; background: #09090a; color: #e1e1e6;
+        }
+        .log-line { margin: 2px 0; border-left: 3px solid transparent; padding-left: 8px; }
+        .log-line.error-line { border-left-color: #f75a68; color: #f75a68; background: rgba(247, 90, 104, 0.05); }
+        .log-line.warn-line { border-left-color: #fba94c; color: #fba94c; }
+        .log-line.success-line { border-left-color: #04d361; color: #04d361; }
+        .highlight { background: #ffdb58; color: #000; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="sidebar-header">
+        <h3 id="user-title">Log Viewer</h3>
+        <button class="logout-btn" onclick="logout()">Wyloguj</button>
+    </div>
+    <div class="tree-container" id="tree">Ładowanie drzewa logów...</div>
+</div>
+
+<div class="main-content">
+    <div class="toolbar">
+        <input type="text" id="search" class="search-box" placeholder="Filtruj logi na żywo (np. ERROR, task_name)..." disabled>
+        <button class="tool-btn" id="btn-clear" onclick="clearTerminal()" disabled>Wyczyść ekran</button>
+        <button class="tool-btn" id="btn-scroll" onclick="toggleAutoscroll()">Autoscroll: ON</button>
+    </div>
+    <div class="log-terminal" id="terminal">Wybierz plik logu z panelu bocznego, aby rozpocząć podgląd live.</div>
+</div>
+
+<script>
+    const token = localStorage.getItem('token');
+    if (!token) window.location.href = 'index.html';
+    
+    document.getElementById('user-title').innerText = `👤 ${localStorage.getItem('username') || 'User'}`;
+
+    let eventSource = null;
+    let currentActiveFile = null;
+    let allLogLines = []; // Przechowuje surowe linie do filtrowania client-side
+    let autoscroll = true;
+
+    const terminal = document.getElementById('terminal');
+    const searchInput = document.getElementById('search');
+    const btnClear = document.getElementById('btn-clear');
+
+    // 1. Pobieranie drzewa logów
+    async function fetchTree() {
+        try {
+            const res = await fetch('/api/logs/tree', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!res.ok) throw new Error();
+            const treeData = await res.json();
+            const treeContainer = document.getElementById('tree');
+            treeContainer.innerHTML = '';
+            
+            if(treeData.length === 0) {
+                treeContainer.innerHTML = '<div style="color:#a8a8b3; padding:10px;">Brak plików .log w katalogu.</div>';
+                return;
+            }
+            
+            treeContainer.appendChild(renderTree(treeData));
+        } catch (e) {
+            document.getElementById('tree').innerText = 'Błąd autoryzacji lub ładowania danych.';
+        }
+    }
+
+    function renderTree(nodes) {
+        const ul = document.createElement('div');
+        nodes.forEach(node => {
+            const el = document.createElement('div');
+            if (node.type === 'directory') {
+                el.className = 'tree-folder';
+                el.innerText = `📁 ${node.name}`;
+                const childrenContainer = document.createElement('div');
+                childrenContainer.className = 'folder-children';
+                childrenContainer.appendChild(renderTree(node.children));
+                
+                el.onclick = (e) => {
+                    e.stopPropagation();
+                    childrenContainer.style.display = childrenContainer.style.display === 'none' ? 'block' : 'none';
+                };
+                ul.appendChild(el);
+                ul.appendChild(childrenContainer);
+            } else {
+                el.className = 'tree-file';
+                el.innerText = `📄 ${node.name} (${(node.size / 1024).toFixed(1)} KB)`;
+                el.onclick = (e) => {
+                    e.stopPropagation();
+                    selectFile(node.path, el);
+                };
+                ul.appendChild(el);
+            }
+        });
+        return ul;
+    }
+
+    // 2. Podpięcie pod Stream Live (SSE)
+    function selectFile(filePath, element) {
+        if (eventSource) eventSource.close();
+        
+        // Zmiana klasy active w menu
+        if (currentActiveFile) currentActiveFile.classList.remove('active');
+        element.classList.add('active');
+        currentActiveFile = element;
+
+        // Reset stanu terminala
+        terminal.innerHTML = `[Połączenie z ${filePath}...]\n`;
+        allLogLines = [];
+        searchInput.disabled = false;
+        btnClear.disabled = false;
+        searchInput.value = '';
+
+        // Otwarcie strumienia SSE z przekazaniem tokenu w URL
+        eventSource = new EventSource(`/api/logs/stream?path=${encodeURIComponent(filePath)}&token=${encodeURIComponent(token)}`);
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'init') {
+                terminal.innerHTML = '';
+                allLogLines = data.lines;
+                renderFilteredLines();
+            } else if (data.type === 'update') {
+                allLogLines = allLogLines.concat(data.lines);
+                // Kontrola rozmiaru bufora w przeglądarce do max 2000 linii (ochrona wydajności karty)
+                if (allLogLines.length > 2000) allLogLines = allLogLines.slice(-2000);
+                
+                data.lines.forEach(line => {
+                    if (shouldShowLine(line, searchInput.value)) {
+                        appendLineToTerminal(line);
+                    }
+                });
+            } else if (data.type === 'clear') {
+                clearTerminal();
+            }
+        };
+
+        eventSource.onerror = () => {
+            terminal.appendChild(document.createTextNode('\n[Połączenie zerwane lub brak dostępu]'));
+            eventSource.close();
+        };
+    }
+
+    // Zwraca klasę CSS na bazie zawartości linii logu
+    function getLineClass(line) {
+        const upper = line.toUpperCase();
+        if (upper.includes('ERROR') || upper.includes('CRITICAL') || upper.includes('FAILED')) return 'log-line error-line';
+        if (upper.includes('WARN') || upper.includes('WARNING')) return 'log-line warn-line';
+        if (upper.includes('SUCCESS') || upper.includes('SUCCESSFULLY')) return 'log-line success-line';
+        return 'log-line';
+    }
+
+    function shouldShowLine(line, filterText) {
+        if (!filterText) return true;
+        return line.toUpperCase().includes(filterText.toUpperCase());
+    }
+
+    function appendLineToTerminal(line) {
+        const lineEl = document.createElement('div');
+        lineEl.className = getLineClass(line);
+        
+        // Podświetlanie szukanej frazy (jeśli wpisano filtr)
+        const filter = searchInput.value;
+        if (filter) {
+            const regex = new RegExp(`(${filter})`, 'gi');
+            lineEl.innerHTML = line.replace(regex, '<span class="highlight">$1</span>');
+        } else {
+            lineEl.innerText = line;
+        }
+
+        terminal.appendChild(lineEl);
+        if (autoscroll) terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function renderFilteredLines() {
+        terminal.innerHTML = '';
+        const filter = searchInput.value;
+        allLogLines.forEach(line => {
+            if (shouldShowLine(line, filter)) {
+                appendLineToTerminal(line);
+            }
+        });
+    }
+
+    // Szybkie filtrowanie client-side podczas pisania
+    searchInput.addEventListener('input', () => {
+        renderFilteredLines();
+    });
+
+    function clearTerminal() {
+        terminal.innerHTML = '[Widok wyczyszczony - nowe logi pojawią się niżej]\n';
+        if (!searchInput.value) allLogLines = [];
+    }
+
+    function toggleAutoscroll() {
+        autoscroll = !autoscroll;
+        document.getElementById('btn-scroll').innerText = `Autoscroll: ${autoscroll ? 'ON' : 'OFF'}`;
+    }
+
+    function logout() {
+        localStorage.clear();
+        window.location.href = 'index.html';
+    }
+
+    // Inicjalizacja
+    fetchTree();
+</script>
+</body>
+</html>
